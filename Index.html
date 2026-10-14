@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ghostcam</title>
+<style>
+:root{color-scheme:dark;--bg:#15171c;--panel:#1e2128;--line:#2f343e;--text:#ecebe6;--dim:#9aa0ab;--rec:#ff4d3d;--ghost:#7fd1ff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+body{display:flex;flex-direction:column;height:100%}
+.stage{position:relative;flex:1;min-height:0;background:#000;overflow:hidden}
+.stage video,.stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#ghost{pointer-events:none;opacity:.4}
+#ghost[hidden]{display:none}
+.grid{position:absolute;inset:0;pointer-events:none;background:linear-gradient(#fff3 1px,transparent 1px) 0 33.3%/100% 33.4% repeat-y,linear-gradient(90deg,#fff3 1px,transparent 1px) 33.3% 0/33.4% 100% repeat-x}
+.grid[hidden]{display:none}
+.msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;color:var(--dim)}
+.msg[hidden]{display:none}
+.badge{position:absolute;top:10px;left:10px;background:#000a;padding:4px 10px;border-radius:99px;font-size:13px}
+.badge[hidden]{display:none}
+.badge::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--rec);margin-right:6px}
+.panel{background:var(--panel);border-top:1px solid var(--line);padding:10px 14px 12px}
+.row{display:flex;align-items:center;gap:10px}
+.slider{margin-bottom:10px}
+.slider label{color:var(--ghost);min-width:92px;font-size:13px}
+input[type=range]{flex:1;accent-color:var(--ghost);height:28px}
+.val{width:40px;text-align:right;color:var(--dim);font-variant-numeric:tabular-nums;font-size:13px}
+.controls{justify-content:space-between}
+.mode{display:flex;background:var(--bg);border-radius:99px;padding:3px}
+.mode button{border:0;background:none;color:var(--dim);padding:8px 14px;border-radius:99px;font:inherit}
+.mode button[aria-pressed=true]{background:var(--text);color:var(--bg)}
+.shutter{width:68px;height:68px;border-radius:50%;border:4px solid var(--text);background:none;padding:0;display:grid;place-items:center}
+.shutter i{width:50px;height:50px;border-radius:50%;background:var(--text);transition:all .15s}
+.shutter.video i{background:var(--rec)}
+.shutter.rec i{width:26px;height:26px;border-radius:7px}
+.tool{width:46px;height:46px;border-radius:50%;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:12px;padding:0}
+.tool[aria-pressed=true]{border-color:var(--ghost);color:var(--ghost)}
+.strip{display:flex;gap:8px;overflow-x:auto;padding:10px 0 2px;min-height:64px}
+.strip:empty::before{content:"Shots appear here. Tap one to use it as the ghost.";color:var(--dim);font-size:13px;align-self:center}
+.th{flex:none;width:54px;height:54px;border-radius:8px;border:2px solid transparent;overflow:hidden;position:relative;background:#000;padding:0}
+.th img{width:100%;height:100%;object-fit:cover}
+.th.on{border-color:var(--ghost)}
+.th b{position:absolute;right:2px;bottom:2px;font-size:10px;background:#000b;border-radius:4px;padding:0 4px;font-weight:500}
+.acts{display:flex;gap:8px;padding-top:8px}
+.acts[hidden]{display:none}
+.acts button{flex:1;border:1px solid var(--line);background:var(--bg);color:var(--text);padding:9px;border-radius:10px;font:inherit;font-size:13px}
+button:focus-visible,input:focus-visible{outline:2px solid var(--ghost);outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="stage">
+  <video id="cam" autoplay playsinline muted></video>
+  <img id="ghost" alt="" hidden>
+  <div class="grid" id="grid" hidden></div>
+  <div class="badge" id="badge" hidden>Recording <span id="t">0:00</span></div>
+  <div class="msg" id="msg">Starting camera…</div>
+</div>
+<div class="panel">
+  <div class="row slider">
+    <label for="op">Ghost opacity</label>
+    <input id="op" type="range" min="0" max="100" value="40">
+    <span class="val" id="opv">40%</span>
+  </div>
+  <div class="row controls">
+    <div class="mode" role="group" aria-label="Mode">
+      <button id="mPhoto" aria-pressed="true">Photo</button>
+      <button id="mVideo" aria-pressed="false">Video</button>
+    </div>
+    <button class="shutter" id="shutter" aria-label="Capture"><i></i></button>
+    <div class="row" style="gap:6px">
+      <button class="tool" id="gridBtn" aria-pressed="false" aria-label="Grid">Grid</button>
+      <button class="tool" id="flip" aria-label="Flip camera">Flip</button>
+    </div>
+  </div>
+  <div class="strip" id="strip"></div>
+  <div class="acts" id="acts" hidden>
+    <button id="save">Save selected</button>
+    <button id="clear">Hide ghost</button>
+    <button id="load">Load image as ghost</button>
+  </div>
+  <input type="file" id="file" accept="image/*" hidden>
+</div>
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var cam=$('cam'),ghost=$('ghost'),msg=$('msg'),shutter=$('shutter'),strip=$('strip'),acts=$('acts');
+  var stream=null,facing='environment',mode='photo',rec=null,chunks=[],timer=null,t0=0;
+  var items=[],sel=-1;
+
+  function start(){
+    if(stream){stream.getTracks().forEach(function(t){t.stop()})}
+    msg.hidden=false;msg.textContent='Starting camera…';
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      msg.textContent='This browser can\u2019t open the camera. Open this page in Safari or Chrome over https.';return;
+    }
+    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}},audio:true})
+    .catch(function(){return navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing}},audio:false})})
+    .then(function(s){stream=s;cam.srcObject=s;msg.hidden=true;})
+    .catch(function(e){
+      msg.textContent='Camera blocked ('+(e&&e.name||'error')+'). Allow camera access in your browser, or open this page directly in its own tab.';
+    });
+  }
+
+  function frame(){
+    var c=document.createElement('canvas');
+    c.width=cam.videoWidth;c.height=cam.videoHeight;
+    c.getContext('2d').drawImage(cam,0,0);
+    return c;
+  }
+
+  function setGhost(i){
+    sel=i;
+    if(i<0){ghost.hidden=true;}else{ghost.src=items[i].ghost;ghost.hidden=false;}
+    render();
+  }
+
+  function render(){
+    strip.innerHTML='';
+    items.forEach(function(it,i){
+      var b=document.createElement('button');
+      b.className='th'+(i===sel?' on':'');
+      b.setAttribute('aria-label',(it.type==='video'?'Video ':'Photo ')+(i+1));
+      var im=document.createElement('img');im.src=it.ghost;b.appendChild(im);
+      if(it.type==='video'){var v=document.createElement('b');v.textContent='video';b.appendChild(v);}
+      b.onclick=function(){setGhost(i)};
+      strip.appendChild(b);
+    });
+    acts.hidden=items.length===0&&ghost.hidden;
+    $('save').style.display=sel>=0&&items[sel]&&items[sel].blobUrl?'':'none';
+  }
+
+  function add(it){items.push(it);setGhost(items.length-1);strip.scrollLeft=strip.scrollWidth;}
+
+  function takePhoto(){
+    if(!cam.videoWidth)return;
+    frame().toBlob(function(blob){
+      var u=URL.createObjectURL(blob);
+      add({type:'photo',ghost:u,blobUrl:u,ext:'jpg'});
+    },'image/jpeg',.92);
+  }
+
+  function fmt(s){return Math.floor(s/60)+':'+('0'+(s%60)).slice(-2)}
+
+  function toggleRec(){
+    if(rec&&rec.state==='recording'){
+      var last=frame();
+      rec._last=last.toDataURL('image/jpeg',.8);
+      rec.stop();return;
+    }
+    if(!stream||!window.MediaRecorder){msg.hidden=false;msg.textContent='Video recording isn\u2019t supported in this browser.';return;}
+    var types=['video/mp4','video/webm;codecs=vp9,opus','video/webm'],mt='';
+    for(var k=0;k<types.length;k++){if(MediaRecorder.isTypeSupported(types[k])){mt=types[k];break;}}
+    chunks=[];
+    rec=new MediaRecorder(stream,mt?{mimeType:mt}:undefined);
+    var r=rec;
+    r.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};
+    r.onstop=function(){
+      clearInterval(timer);$('badge').hidden=true;shutter.classList.remove('rec');
+      var blob=new Blob(chunks,{type:r.mimeType||'video/webm'});
+      var ext=(r.mimeType||'').indexOf('mp4')>-1?'mp4':'webm';
+      add({type:'video',ghost:r._last||'',blobUrl:URL.createObjectURL(blob),ext:ext});
+    };
+    r.start(500);
+    shutter.classList.add('rec');$('badge').hidden=false;t0=Date.now();$('t').textContent='0:00';
+    timer=setInterval(function(){$('t').textContent=fmt(Math.floor((Date.now()-t0)/1000))},500);
+  }
+
+  shutter.onclick=function(){mode==='photo'?takePhoto():toggleRec()};
+
+  function setMode(m){
+    if(rec&&rec.state==='recording')return;
+    mode=m;
+    $('mPhoto').setAttribute('aria-pressed',m==='photo');
+    $('mVideo').setAttribute('aria-pressed',m==='video');
+    shutter.classList.toggle('video',m==='video');
+  }
+  $('mPhoto').onclick=function(){setMode('photo')};
+  $('mVideo').onclick=function(){setMode('video')};
+
+  $('op').oninput=function(e){ghost.style.opacity=e.target.value/100;$('opv').textContent=e.target.value+'%'};
+  $('gridBtn').onclick=function(e){
+    var on=e.currentTarget.getAttribute('aria-pressed')!=='true';
+    e.currentTarget.setAttribute('aria-pressed',on);$('grid').hidden=!on;
+  };
+  $('flip').onclick=function(){
+    if(rec&&rec.state==='recording')return;
+    facing=facing==='environment'?'user':'environment';start();
+  };
+  $('clear').onclick=function(){setGhost(-1)};
+  $('save').onclick=function(){
+    var it=items[sel];if(!it)return;
+    var a=document.createElement('a');a.href=it.blobUrl;
+    a.download='ghostcam-'+Date.now()+'.'+it.ext;
+    document.body.appendChild(a);a.click();a.remove();
+  };
+  $('load').onclick=function(){$('file').click()};
+  $('file').onchange=function(e){
+    var f=e.target.files[0];if(!f)return;
+    add({type:'photo',ghost:URL.createObjectURL(f),blobUrl:null,ext:'jpg'});
+    e.target.value='';
+  };
+
+  ghost.style.opacity=.4;
+  start();
+})();
+</script>
+</body>
+</html>
